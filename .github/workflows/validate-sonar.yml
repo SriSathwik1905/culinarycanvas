@@ -1,0 +1,97 @@
+name: Validate SonarCloud Setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Run the workflow with verbose logging'
+        type: boolean
+        default: false
+        required: false
+
+jobs:
+  validate-sonar:
+    name: Validate SonarCloud Configuration
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Show environment info
+        run: |
+          echo "Node version: $(node -v)"
+          echo "NPM version: $(npm -v)"
+          echo "Current directory: $(pwd)"
+          echo "Repository: ${{ github.repository }}"
+          echo "GitHub Actor: ${{ github.actor }}"
+          ls -la
+      
+      - name: Verify sonar-project.properties
+        run: |
+          echo "Contents of sonar-project.properties:"
+          cat sonar-project.properties
+      
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar-${{ hashFiles('**/sonar-project.properties') }}
+          restore-keys: ${{ runner.os }}-sonar
+      
+      - name: Validate SonarCloud Token
+        if: inputs.debug_mode
+        run: |
+          # Check if SONAR_TOKEN is set
+          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
+            echo "::error::SONAR_TOKEN is not set in repository secrets!"
+            exit 1
+          else
+            echo "SONAR_TOKEN is set (first 5 chars masked): ${{ secrets.SONAR_TOKEN && '****' || 'NOT_SET' }}"
+            echo "Testing SonarCloud API access..."
+            # Not showing the response content to avoid exposing token in logs
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X GET "https://sonarcloud.io/api/system/status" \
+              -H "Authorization: Bearer ${{ secrets.SONAR_TOKEN }}")
+            echo "SonarCloud API status code: $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "::success::SonarCloud API is accessible with the provided token"
+            else
+              echo "::error::Failed to access SonarCloud API. Status code: $STATUS"
+            fi
+          fi
+      
+      - name: SonarCloud Scan (Direct Mode)
+        if: inputs.debug_mode
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.8.0.2856-linux.zip
+          unzip -q sonar-scanner-cli-4.8.0.2856-linux.zip
+          ./sonar-scanner-4.8.0.2856-linux/bin/sonar-scanner \
+            -Dsonar.projectKey=SriSathwik1905_culinarycanvas \
+            -Dsonar.organization=srisathwik1905 \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.verbose=true
+      
+      - name: SonarCloud Scan (GitHub Action)
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      
+      - name: Check SonarCloud scan status
+        run: |
+          echo "SonarCloud scan completed. Check the SonarCloud dashboard for results."
+          echo "https://sonarcloud.io/dashboard?id=SriSathwik1905_culinarycanvas" 
