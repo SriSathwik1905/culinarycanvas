@@ -30,75 +30,59 @@ export const useChefData = (initialChefs: Profile[] = []) => {
       setError(null);
       
       // APPROACH 1: Try using the RPC function for best performance
-      console.log("⚡ Attempting to fetch chefs using RPC function");
-      const { data: chefsWithRecipeCounts, error: chefsError } = await supabase.rpc(
-        'get_chefs_with_recipe_counts'
-      ).order('recipe_count', { ascending: false });
+      // Temporarily skipping RPC approach since the function doesn't exist yet
+      // Will use the fallback approach instead
+      console.log("⚡ Skipping RPC function call - using direct query approach");
       
-      if (chefsError) {
-        // APPROACH 2: Fall back to manual queries if RPC fails
-        console.warn("⚠️ RPC get_chefs_with_recipe_counts failed, using fallback SQL query", chefsError);
+      // Step 1: Get all profiles first
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false });
         
-        // Step 1: Get all profiles first
-        const { data: profiles, error: profilesError } = await supabase
-          .from('profiles')
-          .select('*')
-          .order('created_at', { ascending: false });
-          
-        if (profilesError) {
-          throw profilesError;
-        }
-        
-        if (!profiles || profiles.length === 0) {
-          console.log("ℹ️ No profiles found in database");
-          setChefsWithCounts([]);
-          return;
-        }
-        
-        console.log(`🧑‍🍳 Found ${profiles.length} profiles in database`);
-        
-        // Step 2: Get recipe counts for all profiles
-        const { data: recipeCounts, error: recipeCountsError } = await supabase
-          .from('recipes')
-          .select('user_id, id');
-          
-        if (recipeCountsError) {
-          throw recipeCountsError;
-        }
-        
-        console.log(`🍽️ Found ${recipeCounts?.length || 0} recipes in database`);
-        
-        // Process data manually
-        const countByUser: Record<string, number> = {};
-        recipeCounts?.forEach(recipe => {
-          countByUser[recipe.user_id] = (countByUser[recipe.user_id] || 0) + 1;
-        });
-        
-        // Map chefs to include recipe count and filter for valid ones
-        const validProfiles = profiles
-          .map(profile => ({
-            ...profile,
-            recipe_count: countByUser[profile.id] || 0
-          }))
-          // Make sure each profile has a valid username and at least one recipe
-          .filter(chef => chef.username && chef.recipe_count > 0)
-          .sort((a, b) => (b.recipe_count || 0) - (a.recipe_count || 0));
-  
-        console.log(`📊 Found ${validProfiles.length} chefs with recipes via fallback query`);
-        
-        // APPROACH 3: Direct inclusion of current user if needed
-        await ensureCurrentUserIncluded(validProfiles);
-      } else {
-        // Use the RPC results directly
-        const validChefs = (chefsWithRecipeCounts || [])
-          // Filter out profiles without username or recipe count
-          .filter(chef => chef.username && chef.recipe_count > 0);
-          
-        console.log(`📊 Found ${validChefs.length} chefs with recipes via RPC`);
-        
-        // APPROACH 3: Direct inclusion of current user if needed
-        await ensureCurrentUserIncluded(validChefs);
+      if (profilesError) {
+        throw profilesError;
       }
+      
+      if (!profiles || profiles.length === 0) {
+        console.log("ℹ️ No profiles found in database");
+        setChefsWithCounts([]);
+        return;
+      }
+      
+      console.log(`🧑‍🍳 Found ${profiles.length} profiles in database`);
+      
+      // Step 2: Get recipe counts for all profiles
+      const { data: recipeCounts, error: recipeCountsError } = await supabase
+        .from('recipes')
+        .select('user_id, id');
+        
+      if (recipeCountsError) {
+        throw recipeCountsError;
+      }
+      
+      console.log(`🍽️ Found ${recipeCounts?.length || 0} recipes in database`);
+      
+      // Process data manually
+      const countByUser: Record<string, number> = {};
+      recipeCounts?.forEach(recipe => {
+        countByUser[recipe.user_id] = (countByUser[recipe.user_id] || 0) + 1;
+      });
+      
+      // Map chefs to include recipe count and filter for valid ones
+      const validProfiles = profiles
+        .map(profile => ({
+          ...profile,
+          recipe_count: countByUser[profile.id] || 0
+        }))
+        // Make sure each profile has a valid username and at least one recipe
+        .filter(chef => chef.username && chef.recipe_count > 0)
+        .sort((a, b) => (b.recipe_count || 0) - (a.recipe_count || 0));
+
+      console.log(`📊 Found ${validProfiles.length} chefs with recipes via direct query`);
+      
+      // APPROACH 3: Direct inclusion of current user if needed
+      await ensureCurrentUserIncluded(validProfiles);
       
       // Update last fetch timestamp
       setLastFetch(Date.now());
