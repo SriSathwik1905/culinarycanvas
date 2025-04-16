@@ -142,10 +142,6 @@ jobs:
         if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
         run: aws s3 sync dist/ s3://culinarycanvas-staging
         
-      - name: Invalidate CloudFront cache
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID_STAGING }} --paths "/*"
-        
       - name: Mock deployment (when AWS credentials unavailable)
         if: steps.check-aws-creds.outputs.aws_creds_available == 'false'
         run: echo "AWS credentials not available. Skipping actual deployment but marking this step as successful for CI/CD pipeline."
@@ -188,10 +184,6 @@ jobs:
       - name: Deploy to S3
         if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
         run: aws s3 sync dist/ s3://culinarycanvas-production
-        
-      - name: Invalidate CloudFront cache
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID_PRODUCTION }} --paths "/*"
       
       - name: Mock deployment (when AWS credentials unavailable)
         if: steps.check-aws-creds.outputs.aws_creds_available == 'false'
