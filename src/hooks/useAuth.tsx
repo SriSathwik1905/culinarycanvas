@@ -8,7 +8,9 @@ const AUTH_STORAGE_KEY = "auth_user";
 const AUTH_SESSION_KEY = "auth_session";
 const AUTH_STATE_VERSION = "v1"; // Increment when changing auth structure
 const AUTH_DEBUG = true; // Set to false in production
-const AUTH_TIMEOUT_MS = 10000; // 10 second timeout for auth operations
+const AUTH_TIMEOUT_MS = 30000; // Increased to 30 seconds (from 10 seconds)
+const PROFILE_QUERY_TIMEOUT_MS = 10000; // Increased to 10 seconds (from 3 seconds)
+const MAX_RETRY_ATTEMPTS = 3; // Maximum number of retries for queries
 
 // Logging utilities for auth debugging
 const authLog = {
@@ -95,6 +97,36 @@ const storeAuthState = (state: AuthState) => {
 const createTimeout = (ms: number, message: string) => new Promise((_, reject) => {
   setTimeout(() => reject(new Error(message)), ms);
 });
+
+// Helper function to implement retry logic
+const withRetry = async <T,>(
+  operation: () => Promise<T>, 
+  maxAttempts: number = MAX_RETRY_ATTEMPTS, 
+  description: string = "operation",
+  delay: number = 1000
+): Promise<T> => {
+  let lastError: any;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      authLog.debug(`Attempt ${attempt}/${maxAttempts} for ${description}`);
+      return await operation();
+    } catch (err) {
+      lastError = err;
+      authLog.warn(`Attempt ${attempt}/${maxAttempts} failed for ${description}:`, err);
+      
+      if (attempt < maxAttempts) {
+        // Exponential backoff with jitter
+        const jitter = Math.random() * 300;
+        const backoffDelay = delay * Math.pow(1.5, attempt - 1) + jitter;
+        authLog.debug(`Retrying in ${Math.round(backoffDelay)}ms...`);
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+      }
+    }
+  }
+  
+  throw lastError;
+};
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   // Auth state with initialization status
@@ -230,23 +262,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       
       authLog.info("Processing session for user", userId);
       
-      // Try to get profile with timeout protection
+      // Try to get profile with retry and timeout protection
       let profile = null;
       try {
-        // Type the profilePromise properly to handle the timeout race result
-        const profilePromise = supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
-          
-        const profileResult = await Promise.race([
-          profilePromise,
-          createTimeout(3000, "Profile query timed out")
-        ]);
+        profile = await withRetry(
+          async () => {
+            const profilePromise = supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .single();
+            
+            return await Promise.race([
+              profilePromise,
+              createTimeout(PROFILE_QUERY_TIMEOUT_MS, "Profile query timed out")
+            ]);
+          },
+          3, // 3 retries
+          "profile query"
+        );
         
         // Explicitly cast the result to expected type
-        const result = profileResult as any;
+        const result = profile as any;
         const data = result.data;
         const error = result.error;
         
@@ -269,13 +306,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           authLog.warn("Network error querying profile, using fallback", err);
           
           // Create a fallback user immediately without further database operations
-          return {
-            id: userId,
-            username: fallbackUsername,
-            email: userEmail || undefined,
-            first_name: undefined,
-            last_name: undefined
-          };
+          return createSessionOnlyUser(newSession);
         }
         
         authLog.error("Error querying profile", err);
@@ -334,13 +365,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         authLog.warn("Could not create profile in database, using local-only user data");
         
         // Return minimal user data based on session (won't have database persistence)
-        return {
-          id: userId,
-          username: fallbackUsername,
-          email: userEmail || undefined,
-          first_name: undefined,
-          last_name: undefined
-        };
+        return createSessionOnlyUser(newSession);
       }
       
       // Ensure username exists, fallback to email or ID
@@ -387,18 +412,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           userEmail.split('@')[0].replace(/[^a-zA-Z0-9]/g, '') : 
           `user_${Math.floor(Math.random() * 10000)}`;
           
-        return {
-          id: userId,
-          username: fallbackUsername,
-          email: userEmail || undefined,
-          first_name: undefined,
-          last_name: undefined
-        };
+        return createSessionOnlyUser({
+          user: { id: userId, email: userEmail || undefined },
+          session: null
+        });
       }
       
       return null;
     }
-  }, []);
+  }, [createSessionOnlyUser]);
 
   // Initialize auth with timeout protection
   const initAuth = useCallback(async () => {
