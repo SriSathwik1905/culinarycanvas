@@ -272,7 +272,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
               .select('*')
               .eq('id', userId)
               .single();
-            
+              
             return await Promise.race([
               profilePromise,
               createTimeout(PROFILE_QUERY_TIMEOUT_MS, "Profile query timed out")
@@ -282,145 +282,59 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           "profile query"
         );
         
-        // Explicitly cast the result to expected type
+        // Cast the result to the expected type
         const result = profile as any;
         const data = result.data;
         const error = result.error;
         
+        // Handle the query result
         if (error) {
           if (error.code === 'PGRST116') { // Row not found
             authLog.warn("No profile found for user", userId);
-          } else {
-            throw error;
+            // Try to create profile
+            const newProfile = await createProfileIfMissing(userId, userEmail);
+            if (newProfile) {
+              return {
+                id: newProfile.id,
+                username: newProfile.username,
+                email: newProfile.email,
+                first_name: newProfile.first_name || undefined,
+                last_name: newProfile.last_name || undefined
+              };
+            }
+            
+            // Create a fallback user immediately without further database operations
+            return createSessionOnlyUser(newSession);
           }
-        } else {
-          profile = data;
-        }
-      } catch (err) {
-        // Check if it's a network error
-        if (err instanceof Error && (
-          err.message.includes("Failed to fetch") || 
-          err.message.includes("Network") ||
-          err.message.includes("timed out")
-        )) {
-          authLog.warn("Network error querying profile, using fallback", err);
           
-          // Create a fallback user immediately without further database operations
+          // For other errors, log and return fallback user
+          authLog.error("Error fetching profile", error);
           return createSessionOnlyUser(newSession);
         }
         
-        authLog.error("Error querying profile", err);
-        // Continue with profile creation as fallback
-      }
-      
-      // If no profile exists and we can connect to the database, try to create one
-      if (!profile) {
-        authLog.info("Creating missing profile for user", userId);
-        
-        // First check if we can access the database before attempting creation
-        try {
-          // Simple quick health check query with proper typing
-          const healthCheck = await Promise.race([
-            supabase.from('profiles').select('count').limit(1),
-            createTimeout(2000, "Database health check timed out")
-          ]) as any;
-          
-          // Check if healthCheck has an error properly
-          if (healthCheck && healthCheck.error) {
-            throw new Error("Database appears to be unreachable");
-          }
-          
-          // If health check passes, try to create profile
-          const basicProfile = {
-            id: userId,
-            username: fallbackUsername,
-            email: userEmail || null
+        // Return the user from profile data
+        if (data) {
+          return {
+            id: data.id,
+            username: data.username || fallbackUsername,
+            email: data.email || userEmail,
+            first_name: data.first_name || undefined,
+            last_name: data.last_name || undefined
           };
-          
-          try {
-            // Try to create the profile directly instead of using createProfileWithRetry
-            const { data, error } = await supabase
-              .from('profiles')
-              .insert(basicProfile)
-              .select()
-              .single();
-              
-            if (error) {
-              authLog.warn("Failed to create profile during session processing", error);
-            } else if (data) {
-              profile = data;
-              authLog.info("Created profile during session processing");
-            }
-          } catch (profileErr) {
-            authLog.error("Error creating profile during session processing", profileErr);
-          }
-        } catch (healthErr) {
-          authLog.warn("Database connectivity issues, skipping profile creation", healthErr);
-          // Fall through to use fallback user
         }
-      }
-      
-      // At this point, if we still don't have a profile, use a minimal local-only user object
-      if (!profile) {
-        authLog.warn("Could not create profile in database, using local-only user data");
         
         // Return minimal user data based on session (won't have database persistence)
         return createSessionOnlyUser(newSession);
+      } catch (error) {
+        // Network or timeout error
+        authLog.warn("Network error querying profile, using fallback", error);
+        return createSessionOnlyUser(newSession);
       }
-      
-      // Ensure username exists, fallback to email or ID
-      const username = profile.username || fallbackUsername;
-      
-      // If username was generated but not in profile, try to update it (but don't block on this)
-      if (!profile.username && username) {
-        authLog.info("Updating missing username", username);
-        try {
-          // Don't await this - fire and forget to avoid blocking auth flow
-          // Use IIFE to handle the Promise chain without breaking TypeScript
-          (async () => {
-            try {
-              await supabase
-                .from('profiles')
-                .update({ username })
-                .eq('id', profile.id);
-              authLog.debug("Username updated successfully");
-            } catch (updateErr) {
-              authLog.warn("Failed to update username, but continuing", updateErr);
-            }
-          })();
-        } catch (err) {
-          authLog.warn("Failed to update username, but continuing", err);
-        }
-      }
-      
-      // Return formatted user
-      return {
-        id: profile.id,
-        username,
-        email: profile.email || newSession.user.email,
-        first_name: profile.first_name,
-        last_name: profile.last_name
-      };
     } catch (err) {
       authLog.error("Error processing session", err);
-      
-      // Even in case of errors, try to return a minimal user if we have session data
-      if (newSession?.user?.id) {
-        const userId = newSession.user.id;
-        const userEmail = newSession.user.email;
-        const fallbackUsername = userEmail ? 
-          userEmail.split('@')[0].replace(/[^a-zA-Z0-9]/g, '') : 
-          `user_${Math.floor(Math.random() * 10000)}`;
-          
-        return createSessionOnlyUser({
-          user: { id: userId, email: userEmail || undefined },
-          session: null
-        });
-      }
-      
       return null;
     }
-  }, [createSessionOnlyUser]);
+  }, [createProfileIfMissing, createSessionOnlyUser, getProfileForUser]);
 
   // Initialize auth with timeout protection
   const initAuth = useCallback(async () => {
