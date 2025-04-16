@@ -138,29 +138,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
           
-      - name: Setup Terraform
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.0.0
-          
-      - name: Terraform Init
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: terraform init
-        working-directory: ./infrastructure
-        
-      - name: Terraform Plan
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: terraform plan -out=tfplan
-        working-directory: ./infrastructure
-        env:
-          TF_VAR_environment: staging
-          
-      - name: Terraform Apply
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: terraform apply -auto-approve tfplan
-        working-directory: ./infrastructure
-        
       - name: Deploy to S3
         if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
         run: aws s3 sync dist/ s3://culinarycanvas-staging
@@ -208,29 +185,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
           
-      - name: Setup Terraform
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.0.0
-          
-      - name: Terraform Init
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: terraform init
-        working-directory: ./infrastructure
-        
-      - name: Terraform Plan
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: terraform plan -out=tfplan
-        working-directory: ./infrastructure
-        env:
-          TF_VAR_environment: production
-          
-      - name: Terraform Apply
-        if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
-        run: terraform apply -auto-approve tfplan
-        working-directory: ./infrastructure
-        
       - name: Deploy to S3
         if: steps.check-aws-creds.outputs.aws_creds_available == 'true'
         run: aws s3 sync dist/ s3://culinarycanvas-production
