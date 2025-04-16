@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Profile } from "@/types/profile";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,11 +18,24 @@ export const useChefData = (initialChefs: Profile[] = []) => {
   const [lastFetch, setLastFetch] = useState<number>(0);
   const { user } = useAuth();
 
+  // Add refs to track state and prevent infinite loops
+  const fetchingRef = useRef(false);
+  const initializedRef = useRef(false);
+  const userCheckedRef = useRef(false);
+
   /**
    * Directly query the database for chef data
    * Uses either RPC function or falls back to manual queries
    */
   const fetchChefsDirectly = useCallback(async (forceRefresh = false) => {
+    // Prevent concurrent fetches
+    if (fetchingRef.current && !forceRefresh) {
+      console.log("📊 Skipping fetch - already in progress");
+      return;
+    }
+    
+    // Set fetching flag
+    fetchingRef.current = true;
     console.log("📊 Direct chef data fetch initiated", forceRefresh ? "(forced refresh)" : "");
     
     try {
@@ -47,6 +60,8 @@ export const useChefData = (initialChefs: Profile[] = []) => {
       if (!profiles || profiles.length === 0) {
         console.log("ℹ️ No profiles found in database");
         setChefsWithCounts([]);
+        setLastFetch(Date.now());
+        initializedRef.current = true;
         return;
       }
       
@@ -84,14 +99,18 @@ export const useChefData = (initialChefs: Profile[] = []) => {
       // APPROACH 3: Direct inclusion of current user if needed
       await ensureCurrentUserIncluded(validProfiles);
       
-      // Update last fetch timestamp
+      // Update last fetch timestamp and mark as initialized
       setLastFetch(Date.now());
+      initializedRef.current = true;
     } catch (error) {
       console.error("❌ Error fetching chefs directly:", error);
       setError("Failed to load chef data");
       setChefsWithCounts([]);
+      // Still mark as initialized to prevent infinite loops
+      initializedRef.current = true;
     } finally {
       setIsLoading(false);
+      fetchingRef.current = false;
     }
   }, [user]);
 
@@ -105,6 +124,9 @@ export const useChefData = (initialChefs: Profile[] = []) => {
       setChefsWithCounts(chefList);
       return;
     }
+    
+    // Mark that we've checked this user
+    userCheckedRef.current = true;
     
     console.log("🔍 Checking if current user needs to be added to chef list");
     
@@ -178,10 +200,22 @@ export const useChefData = (initialChefs: Profile[] = []) => {
    * Uses initialChefs if provided, otherwise fetches directly
    */
   useEffect(() => {
+    // Skip if already initialized
+    if (initializedRef.current) {
+      console.log("🔄 Already initialized, skipping redundant fetch");
+      return;
+    }
+    
     // If initialChefs is provided and has content, use it
     if (initialChefs && initialChefs.length > 0) {
       console.log("🔄 Using provided initialChefs:", initialChefs.length);
-      fetchChefsDirectly(false);
+      setChefsWithCounts(initialChefs.map(chef => ({
+        ...chef,
+        recipe_count: 1 // Assume at least 1 recipe for each chef
+      })));
+      setLastFetch(Date.now());
+      initializedRef.current = true;
+      setIsLoading(false);
     } else {
       console.log("🔍 No initialChefs, fetching directly from database");
       fetchChefsDirectly(true);
@@ -193,15 +227,17 @@ export const useChefData = (initialChefs: Profile[] = []) => {
    * Ensures current user is included when user changes
    */
   useEffect(() => {
-    if (user && lastFetch > 0) {
+    // Only run once when user is available and we've initialized data
+    if (user && initializedRef.current && !userCheckedRef.current && !fetchingRef.current) {
       // We already have data but user has changed - check if they're in the list
       const currentUserInList = chefsWithCounts.some(chef => chef.id === user.id);
       
       if (!currentUserInList) {
-        console.log("🔄 User changed, checking if they need to be added to chef list");
+        console.log("🔄 User changed, checking if they need to be added to chef list (once)");
         
-        // APPROACH 5: Refresh chef list when user changes and isn't in the list
+        // APPROACH 5: Add user to chef list when user changes and isn't in the list
         const checkUserRecipes = async () => {
+          userCheckedRef.current = true; // Mark as checked to prevent loops
           try {
             const { data: userRecipes } = await supabase
               .from('recipes')
@@ -209,7 +245,7 @@ export const useChefData = (initialChefs: Profile[] = []) => {
               .eq('user_id', user.id);
               
             if (userRecipes && userRecipes.length > 0) {
-              console.log(`🧑‍🍳 Current user (${user.id}) has ${userRecipes.length} recipes but isn't in chef list. Refreshing.`);
+              console.log(`🧑‍🍳 Current user (${user.id}) has ${userRecipes.length} recipes but isn't in chef list.`);
               
               // Get the latest profile for the user
               const { data: userProfile } = await supabase
@@ -230,9 +266,6 @@ export const useChefData = (initialChefs: Profile[] = []) => {
                 ].sort((a, b) => (b.recipe_count || 0) - (a.recipe_count || 0));
                 
                 setChefsWithCounts(updatedList);
-              } else {
-                // Fallback to full refresh
-                fetchChefsDirectly(true);
               }
             }
           } catch (err) {
@@ -294,7 +327,12 @@ export const useChefData = (initialChefs: Profile[] = []) => {
     getSortedChefs,     // Function to sort chefs
     isLoading,          // Loading state
     error,              // Error state
-    refreshChefs: fetchChefsDirectly, // Function to refresh chef data
+    refreshChefs: () => {
+      // Reset flags and fetch
+      initializedRef.current = false;
+      userCheckedRef.current = false;
+      fetchChefsDirectly(true);
+    },
     forceAddCurrentUser: async () => {  // Function to force add current user
       if (user) {
         const chefList = [...chefsWithCounts];
